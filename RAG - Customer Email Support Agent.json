@@ -1,0 +1,1102 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "includeSpamTrash": false,
+          "includeDrafts": false,
+          "readStatus": "unread"
+        },
+        "options": {}
+      },
+      "id": "00fbbbc6-9cd3-4788-aea6-b8ca33aa8935",
+      "name": "New Customer Email",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -2256,
+        96
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YN9jPnbROfvHadtT",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nfunction parseAddressString(str) {\n  const s = String(str ?? '');\n  const emailMatch = s.match(/<([^>]+)>/);\n  const address = emailMatch ? emailMatch[1].trim() : s.trim();\n  const nameMatch = s.match(/^([^<]+)</);\n  const name = nameMatch ? nameMatch[1].trim().replace(/^\"|\"$/g, '') : '';\n  return { address, name };\n}\n\n// Gmail Trigger runs with simple:false, so From/To arrive as parsed address\n// objects ({ value: [{ address, name }], text, html }), not plain strings.\n// String(anObject) silently produces the literal text \"[object Object]\" -\n// this extracts the real address/name from either shape defensively.\nfunction extractAddressAndName(value) {\n  if (value && typeof value === 'object') {\n    const first = Array.isArray(value.value) ? value.value[0] : null;\n    if (first && first.address) {\n      return { address: String(first.address).trim(), name: String(first.name || '').trim() };\n    }\n    if (typeof value.text === 'string') {\n      return parseAddressString(value.text);\n    }\n    return { address: '', name: '' };\n  }\n  return parseAddressString(value);\n}\n\nreturn items.map(item => {\n  const raw = item.json || {};\n\n  const fromParsed = extractAddressAndName(raw.from);\n  const toParsed = extractAddressAndName(raw.to);\n\n  const customer_email = fromParsed.address;\n  const customer_name = fromParsed.name;\n  const to = toParsed.address;\n\n  const subject = String(raw.subject ?? '').trim();\n\n  let body = raw.text || raw.html || raw.snippet || '';\n  body = String(body ?? '');\n  if (!raw.text && raw.html) {\n    body = body.replace(/<[^>]+>/g, ' ');\n  }\n\n  const lines = body.split(/\\r?\\n/);\n  const cleanedLines = [];\n  for (const line of lines) {\n    const trimmed = line.trim();\n    if (/^on .+ wrote:$/i.test(trimmed)) break;\n    if (/^-----original message-----$/i.test(trimmed)) break;\n    if (/^--\\s*$/.test(trimmed)) break;\n    if (trimmed.startsWith('>')) continue;\n    cleanedLines.push(line);\n  }\n\n  let normalized_question = cleanedLines.join('\\n')\n    .replace(/[ \\t]+/g, ' ')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n\n  if (normalized_question.length > 3000) {\n    normalized_question = normalized_question.slice(0, 3000);\n  }\n\n  return {\n    json: {\n      message_id: String(raw.id ?? ''),\n      thread_id: String(raw.threadId ?? ''),\n      customer_email,\n      customer_name,\n      to,\n      subject,\n      received_at: String(raw.date ?? ''),\n      raw_body: body,\n      normalized_question\n    }\n  };\n});"
+      },
+      "id": "8283fe23-f445-463a-8e10-f809d6151b31",
+      "name": "Extract & Normalize Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2032,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "retrieval-query",
+              "name": "retrieval_query",
+              "value": "={{ $json.subject }}\n\n{{ $json.normalized_question }}",
+              "type": "string"
+            },
+            {
+              "id": "processing-status",
+              "name": "status",
+              "value": "awaiting_retrieval",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "72b585d5-0abd-4d18-a573-bb34b0cff6d2",
+      "name": "Prepare Retrieval Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1840,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "model": "nomic-embed-text:latest",
+        "options": {}
+      },
+      "id": "261c4258-cd4d-4d5c-990d-2c6b1f46fce0",
+      "name": "Embeddings OpenAI (Retrieval)",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -1664,
+        160
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "openAiApi": {
+          "id": "6iHzw3Lc2vdTrifC",
+          "name": "OpenAI account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "load",
+        "chromaCollection": {
+          "__rl": true,
+          "mode": "id",
+          "value": "techsupport_pro_kb"
+        },
+        "prompt": "={{ $json.retrieval_query }}",
+        "topK": 5,
+        "options": {}
+      },
+      "id": "447a7587-d1bb-479e-9208-1b8a573a7c9e",
+      "name": "ChromaDB Retrieval",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreChromaDB",
+      "typeVersion": 1.3,
+      "position": [
+        -1664,
+        -16
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "chromaSelfHostedApi": {
+          "id": "7r9T9ezmOjLpEw5B",
+          "name": "ChromaDB Self-Hosted account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const chunks = $input.all();\nconst grouped = {};\nconst order = [];\nchunks.forEach((chunk, i) => {\n  const source = $('Prepare Retrieval Input').itemMatching(i);\n  const original = source ? source.json : {};\n  const key = original.message_id || String(i);\n  if (!grouped[key]) {\n    grouped[key] = { original, chunks: [] };\n    order.push(key);\n  }\n  const doc = chunk.json.document || {};\n  grouped[key].chunks.push({\n    text: doc.pageContent || chunk.json.pageContent || chunk.json.text || '',\n    metadata: doc.metadata || chunk.json.metadata || {},\n    score: (chunk.json.score !== undefined ? chunk.json.score : (chunk.json.distance !== undefined ? chunk.json.distance : null))\n  });\n});\nreturn order.map(key => {\n  const { original, chunks: items } = grouped[key];\n  const sorted = items.slice().sort((a, b) => (a.score ?? 0) - (b.score ?? 0));\n  const contextParts = sorted.map((c, i) => {\n    const label = c.metadata.title || c.metadata.file_name || 'Unknown Source';\n    return `[Source ${i + 1}: ${label}]\\n${c.text}`;\n  });\n  const kb_context = contextParts.length ? contextParts.join('\\n\\n---\\n\\n') : '(No relevant knowledge base content found.)';\n  const sources = [...new Set(sorted.map(c => c.metadata.title || c.metadata.file_name || 'Unknown Source'))];\n  const scores = sorted.map(c => c.score);\n  return {\n    json: {\n      ...original,\n      kb_context,\n      kb_sources: sources,\n      kb_chunk_count: sorted.length,\n      kb_scores: scores\n    }\n  };\n});"
+      },
+      "id": "2071264e-10be-4853-8020-99d637351fc6",
+      "name": "Build KB Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1360,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"answer\": {\n      \"type\": \"string\",\n      \"description\": \"The answer to the customer question, grounded only in the provided knowledge base context.\"\n    },\n    \"confidence\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"high\",\n        \"medium\",\n        \"low\"\n      ],\n      \"description\": \"high = fully answered from KB, medium = partially answered, low = KB context is insufficient or unrelated\"\n    },\n    \"status\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"answered\",\n        \"needs_human_review\"\n      ],\n      \"description\": \"needs_human_review is required whenever confidence is low\"\n    }\n  },\n  \"required\": [\n    \"answer\",\n    \"confidence\",\n    \"status\"\n  ]\n}"
+      },
+      "id": "5221dc70-2431-4a8c-96fe-634eaa156f28",
+      "name": "Structured Output Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        -1008,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=KNOWLEDGE BASE CONTEXT:\n{{ $json.kb_context }}\n\nCUSTOMER SUBJECT: {{ $json.subject }}\n\nCUSTOMER QUESTION:\n{{ $json.normalized_question }}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "You are a customer support assistant for TechSupport Pro. Answer the customer's question using ONLY the information in the KNOWLEDGE BASE CONTEXT provided in the user message. Do not use any outside knowledge, do not guess, and do not make up facts, prices, policies, or steps that are not present in the context.\n\nRules:\n1. If the knowledge base context fully and clearly answers the question, set confidence to \"high\" and status to \"answered\".\n2. If the knowledge base context only partially answers the question (e.g. it covers the general case but not a specific detail the customer asked about), set confidence to \"medium\", answer with what is genuinely supported by the context, explicitly note what is not covered, and set status to \"needs_human_review\" so a human can confirm the missing part.\n3. If the knowledge base context is unrelated to the question or clearly insufficient to answer it at all, set confidence to \"low\" and status to \"needs_human_review\", and the answer MUST be exactly: \"I'm sorry, I don't have enough information in our knowledge base to answer this question confidently. I've flagged this for a member of our support team to follow up with you personally.\"\n4. confidence \"low\" must ALWAYS pair with status \"needs_human_review\". Never output confidence \"low\" with status \"answered\".\n5. Never fabricate information. When in doubt, prefer a lower confidence level.\n\nRespond only in the required structured JSON format."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "id": "39967cfd-6652-4ef9-82ef-5ef90315b522",
+      "name": "AI Support Agent",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        -1168,
+        -16
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "customer_email",
+              "value": "={{ $('Build KB Context').item.json.customer_email }}",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "customer_name",
+              "value": "={{ $('Build KB Context').item.json.customer_name }}",
+              "type": "string"
+            },
+            {
+              "id": "a3",
+              "name": "subject",
+              "value": "={{ $('Build KB Context').item.json.subject }}",
+              "type": "string"
+            },
+            {
+              "id": "a4",
+              "name": "answer",
+              "value": "={{ $json.output.answer }}",
+              "type": "string"
+            },
+            {
+              "id": "a5",
+              "name": "confidence",
+              "value": "={{ $json.output.confidence }}",
+              "type": "string"
+            },
+            {
+              "id": "a6",
+              "name": "sources",
+              "value": "={{ $('Build KB Context').item.json.kb_sources }}",
+              "type": "array"
+            },
+            {
+              "id": "a7",
+              "name": "status",
+              "value": "={{ $json.output.status }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "343ddde9-04d7-441a-9e89-f5681fbcde87",
+      "name": "Grounded Support Answer",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -832,
+        -192
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.confidence }}",
+              "rightValue": "high",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "c2",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "answered",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "fc2b5f0c-3131-407c-b54c-5dbe99c0e96e",
+      "name": "Human Approval",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -256,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "=Re: {{ $json.subject }}",
+        "message": "=Hi {{ $json.customer_name }},\n\n{{ $json.answer }}\n\nBest regards,\nTechSupport Pro Support Team\n\n---\nThis draft was prepared with AI assistance from our knowledge base. Please review before sending.",
+        "options": {
+          "threadId": "={{ $json.thread_id }}",
+          "sendTo": "={{ $json.customer_email }}"
+        }
+      },
+      "id": "b80ceb1b-33dc-4cc8-936d-91f420af1636",
+      "name": "Create Gmail Draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -16,
+        144
+      ],
+      "webhookId": "fe8ea993-727b-4e49-9216-0133a0e0b8ff",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YN9jPnbROfvHadtT",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f1",
+              "name": "approval_status",
+              "value": "needs_human_review",
+              "type": "string"
+            },
+            {
+              "id": "f2",
+              "name": "review_reason",
+              "value": "={{ $json.confidence === 'low' ? 'Low confidence - insufficient knowledge base context to answer safely' : ($json.status === 'needs_human_review' ? 'AI flagged this case for human review' : 'Medium confidence - only partially covered by knowledge base') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "bea08570-e86b-4fb8-a186-7d5e8b5c49b9",
+      "name": "Flag for Human Review",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -16,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "123f11cb-8981-462d-8811-b189efcebc0f",
+      "name": "Merge Draft Result",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -16,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d7",
+              "name": "approval_status",
+              "value": "draft_prepared",
+              "type": "string"
+            },
+            {
+              "id": "d8",
+              "name": "gmail_draft_id",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "c898593d-3656-4650-a443-d59de3bd5082",
+      "name": "Draft Ready for Review",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        176,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "t1",
+              "name": "thread_id",
+              "value": "={{ $('Build KB Context').item.json.thread_id }}",
+              "type": "string"
+            },
+            {
+              "id": "t2",
+              "name": "message_id",
+              "value": "={{ $('Build KB Context').item.json.message_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "95d253bc-4773-4e72-9e3c-72bd71610de4",
+      "name": "Attach Thread Info",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -832,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "c26bd8c6-9b37-4115-9c04-12bb3981b0b0",
+      "name": "Merge Thread Data",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -608,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: {} }];"
+      },
+      "id": "5a8e5c7a-49e1-40d8-b6ab-4f2f4e701f10",
+      "name": "Prepare Label Bootstrap",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2032,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "label",
+        "operation": "create",
+        "name": "AI-Processed",
+        "options": {}
+      },
+      "id": "03793129-257e-439c-8081-26e281796411",
+      "name": "Ensure AI-Processed Label",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -1840,
+        368
+      ],
+      "webhookId": "f7c4cc98-f9d5-4b25-aeed-357ed3cd49c4",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YN9jPnbROfvHadtT",
+          "name": "Gmail account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "resource": "label",
+        "operation": "create",
+        "name": "AI-Needs-Review",
+        "options": {}
+      },
+      "id": "29d2eb78-d878-4a70-b1ec-fb7b7df81a63",
+      "name": "Ensure AI-Needs-Review Label",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -1632,
+        368
+      ],
+      "webhookId": "24415a93-d111-4be3-a6ca-49c8c1a09883",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YN9jPnbROfvHadtT",
+          "name": "Gmail account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "resource": "label",
+        "returnAll": true
+      },
+      "id": "53482eb2-7065-45b3-b8fb-34850f92e5a7",
+      "name": "Get Existing Labels",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -1424,
+        368
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "webhookId": "9190b5c1-f7bf-4cf6-83bb-9522539a3ff3",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YN9jPnbROfvHadtT",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const labels = $input.all();\nlet ai_processed_label_id = '';\nlet ai_needs_review_label_id = '';\nlabels.forEach(item => {\n  const name = item.json.name;\n  if (name === 'AI-Processed') ai_processed_label_id = item.json.id || '';\n  if (name === 'AI-Needs-Review') ai_needs_review_label_id = item.json.id || '';\n});\nreturn [{ json: { ai_processed_label_id, ai_needs_review_label_id } }];"
+      },
+      "id": "c4a988e8-4c3f-43e2-a88f-9b574d226334",
+      "name": "Build Label Map",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1200,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// This node's only wired input (Build Label Map) always emits exactly ONE\n// aggregated item (the resolved label IDs), never the per-email Gmail data.\n// The Gmail Trigger's own items are pulled in directly by name instead of\n// through a Merge, because a position-based Merge against a permanently\n// 1-item stream would silently drop every email past the first.\nconst triggerItems = $('New Customer Email').all();\n\nconst labelItem = $input.first();\nconst labelData = labelItem ? labelItem.json : {};\nconst ai_processed_label_id = String(labelData.ai_processed_label_id ?? \"\");\nconst ai_needs_review_label_id = String(labelData.ai_needs_review_label_id ?? \"\");\n\nfunction toText(value) {\n  if (value === null || value === undefined) return \"\";\n  if (typeof value === \"string\") return value;\n  if (Array.isArray(value)) return value.map(toText).join(\" \");\n  if (typeof value === \"object\") {\n    if (value.value !== undefined) return toText(value.value);\n    if (value.text !== undefined) return toText(value.text);\n    return JSON.stringify(value);\n  }\n  return String(value);\n}\n\nfunction extractEmail(value) {\n  const match = value.match(/<([^<>@\\s]+@[^<>@\\s]+)>|([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})/);\n  return match ? (match[1] || match[2]).trim().toLowerCase() : \"\";\n}\n\nfunction extractName(value) {\n  const match = value.match(/^\"?([^\"<]+?)\"?\\s*<[^<>]+>$/);\n  return match ? match[1].trim() : \"\";\n}\n\nreturn triggerItems.map((item) => {\n  const raw = (item && item.json) || {};\n\n  const fromRaw = toText(raw.from);\n  const toRaw = toText(raw.to);\n  const subject = toText(raw.subject).trim();\n  const body = toText(raw.text || raw.html || raw.snippet || \"\").trim();\n  const messageId = toText(raw.id);\n  const threadId = toText(raw.threadId);\n  const labelIds = Array.isArray(raw.labelIds) ? raw.labelIds : [];\n\n  const from = extractEmail(fromRaw);\n  const fromName = extractName(fromRaw);\n\n  const normalizedSubject = subject.toLowerCase();\n  const duplicateKey = `${from}|${normalizedSubject}`;\n\n  const validFrom = from.length > 0;\n  const validSubject = subject.length > 0;\n  const validBody = body.length > 0;\n  const validEmail = validFrom && validSubject && validBody;\n\n  // Required by the downstream \"Apply Dedup Gate\" node - do not remove.\n  const is_duplicate = !!(ai_processed_label_id && labelIds.includes(ai_processed_label_id));\n  const sender_valid = validFrom;\n  let skip_reason = \"\";\n  if (is_duplicate) skip_reason = \"duplicate_already_processed\";\n  else if (!sender_valid) skip_reason = \"invalid_sender_format\";\n\n  return {\n    json: {\n      messageId,\n      threadId,\n      from,\n      fromName,\n      to: toRaw,\n      subject,\n      body,\n\n      duplicateKey,\n\n      ai_processed_label_id,\n      ai_needs_review_label_id,\n\n      validation: {\n        validFrom,\n        validSubject,\n        validBody,\n        validEmail\n      },\n\n      message_id: messageId,\n      is_duplicate,\n      sender_valid,\n      skip_reason\n    }\n  };\n});"
+      },
+      "id": "ee26562b-34f9-4f8a-ac0c-36fcec928094",
+      "name": "Validate & Check Duplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -928,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "330010f0-0a2b-4b0d-b12f-b259479037e6",
+      "name": "Merge Dedup Check",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -640,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(item => {\n  const d = item.json;\n  let confidence = d.confidence;\n  let status = d.status;\n  let dedup_override = false;\n  if (d.is_duplicate) {\n    confidence = 'n/a';\n    status = 'skipped_duplicate';\n    dedup_override = true;\n  } else if (d.sender_valid === false) {\n    confidence = 'n/a';\n    status = 'skipped_invalid_sender';\n    dedup_override = true;\n  }\n  return { json: { ...d, confidence, status, dedup_override } };\n});"
+      },
+      "id": "cdb5294a-2a80-4fc9-a8b8-f5de585dfa25",
+      "name": "Apply Dedup Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -432,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "l1",
+              "name": "label_id_to_apply",
+              "value": "={{ $json.ai_processed_label_id }}",
+              "type": "string"
+            },
+            {
+              "id": "l2",
+              "name": "audit_event_type",
+              "value": "draft_created",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "bac217ca-0207-46a7-be48-c0a0e25ea9ef",
+      "name": "Prepare Draft Label Info",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        400,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "l3",
+              "name": "label_id_to_apply",
+              "value": "={{ $json.ai_needs_review_label_id }}",
+              "type": "string"
+            },
+            {
+              "id": "l4",
+              "name": "audit_event_type",
+              "value": "flagged_for_review",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "4a3094ec-e345-4bf0-a912-9cd48d88edc1",
+      "name": "Prepare Review Label Info",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        432,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $json.message_id }}",
+        "labelIds": [
+          "={{ $json.label_id_to_apply }}"
+        ]
+      },
+      "id": "41f523a1-a8dc-404a-bd5c-b909ab482c1e",
+      "name": "Apply Gmail Label",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        704,
+        448
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000,
+      "webhookId": "ddc34e3a-94fe-4a50-a3ae-e231e144ea86",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YN9jPnbROfvHadtT",
+          "name": "Gmail account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const item = $input.item.json;\nlet orig = null;\ntry {\n  const m = $('Prepare Draft Label Info').itemMatching($itemIndex);\n  if (m) orig = m.json;\n} catch (e) {}\nif (!orig) {\n  try {\n    const m = $('Prepare Review Label Info').itemMatching($itemIndex);\n    if (m) orig = m.json;\n  } catch (e) {}\n}\nconst merged = { ...(orig || {}), ...item };\nconst label_apply_error = (item && item.error) ? item.error : '';\nconst entry = {\n  timestamp: new Date().toISOString(),\n  event_type: merged.audit_event_type || '',\n  message_id: merged.message_id || '',\n  thread_id: merged.thread_id || '',\n  customer_email: merged.customer_email || '',\n  subject: merged.subject || '',\n  confidence: merged.confidence || '',\n  status: merged.status || '',\n  approval_status: merged.approval_status || '',\n  gmail_draft_id: merged.gmail_draft_id || '',\n  review_reason: merged.review_reason || '',\n  skip_reason: merged.skip_reason || '',\n  label_apply_error: label_apply_error\n};\nconst json = JSON.stringify(entry);\nconst b64 = Buffer.from(json, 'utf-8').toString('base64');\nreturn { json: { ...entry, log_b64: b64 } };"
+      },
+      "id": "1ea2bfc6-3a7d-4489-ac99-797cc1e2a4ce",
+      "name": "Build Audit Log Entry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        912,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=Add-Content -Path 'C:\\Users\\n8nssh\\rag-audit-logs\\emails.log' -Value ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{{ $json.log_b64 }}')) + [Environment]::NewLine)",
+        "cwd": "C:\\Users\\n8nssh\\rag-audit-logs"
+      },
+      "id": "e0df7da9-5061-4a92-b499-dcd8e3667b93",
+      "name": "Append Audit Log",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        448
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "sshPassword": {
+          "id": "WtgXTN8bxceG3NUG",
+          "name": "SSH Password account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "s1",
+              "name": "review_reason",
+              "value": "={{ $json.skip_reason === 'duplicate_already_processed' ? 'Duplicate: this email was already processed and labeled AI-Processed - skipped to avoid a second draft.' : ($json.skip_reason === 'invalid_sender_format' ? 'Invalid sender: the From header could not be parsed as a valid email address - needs manual verification.' : $json.review_reason) }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "ca9c050f-ccf4-400d-86d7-4af4947b03ed",
+      "name": "Sharpen Review Reason",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        208,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "model": "llama3.2:3b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        -1184,
+        160
+      ],
+      "id": "421cf529-5039-46a8-9c86-84a94de6967d",
+      "name": "Ollama Chat Model",
+      "credentials": {
+        "ollamaApi": {
+          "id": "c4mJmPsuixyetyrg",
+          "name": "Ollama account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "New Customer Email": {
+      "main": [
+        [
+          {
+            "node": "Extract & Normalize Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare Label Bootstrap",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract & Normalize Email": {
+      "main": [
+        [
+          {
+            "node": "Prepare Retrieval Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Retrieval Input": {
+      "main": [
+        [
+          {
+            "node": "ChromaDB Retrieval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI (Retrieval)": {
+      "ai_embedding": [
+        [
+          {
+            "node": "ChromaDB Retrieval",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ChromaDB Retrieval": {
+      "main": [
+        [
+          {
+            "node": "Build KB Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build KB Context": {
+      "main": [
+        [
+          {
+            "node": "AI Support Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Support Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Support Agent": {
+      "main": [
+        [
+          {
+            "node": "Grounded Support Answer",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Attach Thread Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grounded Support Answer": {
+      "main": [
+        [
+          {
+            "node": "Merge Thread Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Human Approval": {
+      "main": [
+        [
+          {
+            "node": "Create Gmail Draft",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Draft Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Flag for Human Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Gmail Draft": {
+      "main": [
+        [
+          {
+            "node": "Merge Draft Result",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Flag for Human Review": {
+      "main": [
+        [
+          {
+            "node": "Sharpen Review Reason",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Draft Result": {
+      "main": [
+        [
+          {
+            "node": "Draft Ready for Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft Ready for Review": {
+      "main": [
+        [
+          {
+            "node": "Prepare Draft Label Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Thread Info": {
+      "main": [
+        [
+          {
+            "node": "Merge Thread Data",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Thread Data": {
+      "main": [
+        [
+          {
+            "node": "Merge Dedup Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Label Bootstrap": {
+      "main": [
+        [
+          {
+            "node": "Ensure AI-Processed Label",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure AI-Processed Label": {
+      "main": [
+        [
+          {
+            "node": "Ensure AI-Needs-Review Label",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure AI-Needs-Review Label": {
+      "main": [
+        [
+          {
+            "node": "Get Existing Labels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Existing Labels": {
+      "main": [
+        [
+          {
+            "node": "Build Label Map",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Label Map": {
+      "main": [
+        [
+          {
+            "node": "Validate & Check Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Check Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Merge Dedup Check",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Dedup Check": {
+      "main": [
+        [
+          {
+            "node": "Apply Dedup Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Dedup Gate": {
+      "main": [
+        [
+          {
+            "node": "Human Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Draft Label Info": {
+      "main": [
+        [
+          {
+            "node": "Apply Gmail Label",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Review Label Info": {
+      "main": [
+        [
+          {
+            "node": "Apply Gmail Label",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Gmail Label": {
+      "main": [
+        [
+          {
+            "node": "Build Audit Log Entry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Audit Log Entry": {
+      "main": [
+        [
+          {
+            "node": "Append Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sharpen Review Reason": {
+      "main": [
+        [
+          {
+            "node": "Prepare Review Label Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Support Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "c043e6cbd14f0e537c29d8fd31d50986ef38362eb974a1cff9393948907b692b"
+  }
+}

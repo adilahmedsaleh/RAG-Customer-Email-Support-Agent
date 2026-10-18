@@ -1,0 +1,156 @@
+{
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -384,
+        -128
+      ],
+      "id": "83915ff4-ad80-4b4d-835f-f0d7ab0314ba",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "chromaCollection": {
+          "__rl": true,
+          "value": "techsupport_pro_kb",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreChromaDB",
+      "typeVersion": 1.3,
+      "position": [
+        -32,
+        -128
+      ],
+      "id": "186af97b-b589-4b7e-b20e-c9d1b3665759",
+      "name": "Chroma Vector Store",
+      "credentials": {
+        "chromaSelfHostedApi": {
+          "id": "7r9T9ezmOjLpEw5B",
+          "name": "ChromaDB Self-Hosted account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonMode": "expressionData",
+        "jsonData": "={{ $json.content }}",
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              {
+                "name": "title",
+                "value": "={{ $json.title }}"
+              },
+              {
+                "name": "category",
+                "value": "={{ $json.category }}"
+              },
+              {
+                "name": "source",
+                "value": "={{ $json.source }}"
+              }
+            ]
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1.1,
+      "position": [
+        160,
+        32
+      ],
+      "id": "24e4ccac-fc83-4016-8cea-86ffcf30d519",
+      "name": "Default Data Loader"
+    },
+    {
+      "parameters": {
+        "jsCode": "const kbArticles = [\n  {\n    title: \"Order Tracking and Shipping\",\n    category: \"e-commerce\",\n    content: `Customers can track an order from the Order History section of their TechSupport Pro account. \nAfter an order ships, the tracking number is displayed in the order details and the customer can use it to follow the shipment.\nStandard shipping normally takes 3 to 5 business days after dispatch. \nIf tracking information has not updated for several business days, the customer should contact support for assistance.\nTechSupport Pro support cannot change the delivery address after an order has been shipped.`,\n    source: \"TechSupport Pro Support Policy - Order Tracking\"\n  },\n\n  {\n    title: \"Returns and Refunds\",\n    category: \"e-commerce\",\n    content: `Eligible products may be returned within 30 days of delivery when they are in unused and resalable condition.\nCustomers should contact support to start a return request and provide the order number.\nRefunds are processed after the returned item is received and inspected.\nThe original payment method is used for approved refunds.\nAccount-specific refund status and exceptions require human support review.`,\n    source: \"TechSupport Pro Support Policy - Returns and Refunds\"\n  },\n\n  {\n    title: \"Password Reset\",\n    category: \"saas\",\n    content: `Customers who forget their TechSupport Pro password can select \"Forgot Password\" on the sign-in page.\nA password-reset email is then sent to the email address associated with the account.\nThe reset link should be used promptly and a new password should be created.\nIf the customer does not receive the reset email, they should check spam or junk folders.\nAccount ownership and identity verification issues must be handled by human support.`,\n    source: \"TechSupport Pro SaaS Guide - Password Reset\"\n  },\n\n  {\n    title: \"Troubleshooting Application Access\",\n    category: \"saas\",\n    content: `If the TechSupport Pro application is not loading, customers should first verify their internet connection and refresh the application.\nThey should also try signing out and signing back in.\nIf the problem continues, the customer should record the error message and contact support.\nSupport may need to investigate account-specific access problems or service incidents.\nThe automated support agent must not claim that an outage exists unless the knowledge base explicitly confirms it.`,\n    source: \"TechSupport Pro SaaS Guide - Application Troubleshooting\"\n  },\n\n  {\n    title: \"Course Enrollment\",\n    category: \"education\",\n    content: `Customers can enroll in available TechSupport Pro training courses through the Courses section of the platform.\nCourse availability and enrollment requirements are shown on the course information page.\nIf a course requires approval or has restricted enrollment, the request must be reviewed by the appropriate human administrator.\nQuestions involving a specific student's enrollment record require human support.`,\n    source: \"TechSupport Pro Education Policy - Course Enrollment\"\n  },\n\n  {\n    title: \"Healthcare Administrative Support\",\n    category: \"healthcare\",\n    content: `TechSupport Pro may provide general administrative information about supported healthcare services, scheduling processes, and account procedures.\nThe support agent must not provide medical advice, diagnosis, treatment recommendations, or interpretations of medical results.\nQuestions involving a customer's personal medical information or specific healthcare case must be routed to human support.\nSensitive account or patient information should not be exposed in automated responses.`,\n    source: \"TechSupport Pro Healthcare Administrative Policy\"\n  },\n\n  {\n    title: \"Banking Product and Policy Information\",\n    category: \"banking\",\n    content: `TechSupport Pro support can provide general information about supported banking products and published policies.\nThe automated agent must not provide individualized financial advice.\nQuestions involving a specific customer's account balance, transaction, payment dispute, identity verification, or other sensitive account information must be routed to human support.\nWhen a policy does not clearly answer a question, the agent should not guess and should request human review.`,\n    source: \"TechSupport Pro Banking General Policy\"\n  },\n\n  {\n    title: \"When Human Support Is Required\",\n    category: \"general\",\n    content: `Human support is required when a customer question cannot be answered confidently from the available TechSupport Pro knowledge base.\nAccount-specific, sensitive, confidential, disputed, or exceptional cases should be routed to a human.\nIf the knowledge base only partially answers a question, the response should be marked for human review.\nIf the knowledge base contains insufficient information, the automated agent must not invent an answer.\nAutomated responses should remain grounded in the retrieved knowledge-base content.`,\n    source: \"TechSupport Pro Support Escalation Policy\"\n  }\n];\n\nreturn kbArticles.map(article => ({\n  json: article\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -208,
+        -128
+      ],
+      "id": "7ac47ced-3d9b-45e3-9631-0353d97fbe6f",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "model": "nomic-embed-text:latest",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -48,
+        32
+      ],
+      "id": "488cc6d8-1f46-433a-98e2-baae90d9a937",
+      "name": "Embeddings OpenAI",
+      "credentials": {
+        "openAiApi": {
+          "id": "6iHzw3Lc2vdTrifC",
+          "name": "OpenAI account 2"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Default Data Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Chroma Vector Store",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Chroma Vector Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Chroma Vector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "c043e6cbd14f0e537c29d8fd31d50986ef38362eb974a1cff9393948907b692b"
+  }
+}
